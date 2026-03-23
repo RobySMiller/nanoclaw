@@ -7,7 +7,12 @@ import { ChildProcess, spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
-import { CREDENTIAL_PROXY_PORT, DATA_DIR, GROUPS_DIR, TIMEZONE } from './config.js';
+import {
+  CREDENTIAL_PROXY_PORT,
+  DATA_DIR,
+  GROUPS_DIR,
+  TIMEZONE,
+} from './config.js';
 import {
   ContainerInput,
   ContainerOutput,
@@ -41,6 +46,19 @@ export async function runNativeAgent(
     '.claude',
   );
   fs.mkdirSync(groupSessionsDir, { recursive: true });
+
+  // Pre-configure Claude CLI to skip first-run wizard
+  const userSettingsFile = path.join(groupSessionsDir, 'user_settings.json');
+  if (!fs.existsSync(userSettingsFile)) {
+    fs.writeFileSync(
+      userSettingsFile,
+      JSON.stringify({
+        theme: 'dark',
+        hasCompletedOnboarding: true,
+        hasAcknowledgedDisclaimer: true,
+      }),
+    );
+  }
 
   const settingsFile = path.join(groupSessionsDir, 'settings.json');
   if (!fs.existsSync(settingsFile)) {
