@@ -2,12 +2,13 @@ import { ChildProcess } from 'child_process';
 import { CronExpressionParser } from 'cron-parser';
 import fs from 'fs';
 
-import { ASSISTANT_NAME, SCHEDULER_POLL_INTERVAL, TIMEZONE } from './config.js';
+import { ASSISTANT_NAME, NATIVE_MODE, SCHEDULER_POLL_INTERVAL, TIMEZONE } from './config.js';
 import {
   ContainerOutput,
   runContainerAgent,
   writeTasksSnapshot,
 } from './container-runner.js';
+import { runNativeAgent } from './native-runner.js';
 import {
   getAllTasks,
   getDueTasks,
@@ -169,7 +170,8 @@ async function runTask(
   };
 
   try {
-    const output = await runContainerAgent(
+    const runner = NATIVE_MODE ? runNativeAgent : runContainerAgent;
+    const output = await runner(
       group,
       {
         prompt: task.prompt,

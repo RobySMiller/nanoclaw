@@ -5,6 +5,7 @@ import {
   ASSISTANT_NAME,
   CREDENTIAL_PROXY_PORT,
   IDLE_TIMEOUT,
+  NATIVE_MODE,
   POLL_INTERVAL,
   TIMEZONE,
   TRIGGER_PATTERN,
@@ -44,6 +45,7 @@ import {
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { startIpcWatcher } from './ipc.js';
+import { runNativeAgent } from './native-runner.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
 import {
   restoreRemoteControl,
@@ -310,7 +312,8 @@ async function runAgent(
     : undefined;
 
   try {
-    const output = await runContainerAgent(
+    const runner = NATIVE_MODE ? runNativeAgent : runContainerAgent;
+    const output = await runner(
       group,
       {
         prompt,
@@ -470,22 +473,36 @@ function ensureContainerSystemRunning(): void {
 }
 
 async function main(): Promise<void> {
-  ensureContainerSystemRunning();
+  if (NATIVE_MODE) {
+    const { execSync } = await import('child_process');
+    const agentRunnerDir = path.join(process.cwd(), 'container', 'agent-runner');
+    if (!fs.existsSync(path.join(agentRunnerDir, 'node_modules'))) {
+      logger.info('Installing agent-runner dependencies...');
+      execSync('npm install', { cwd: agentRunnerDir, stdio: 'inherit' });
+    }
+    if (!fs.existsSync(path.join(agentRunnerDir, 'dist', 'index.js'))) {
+      logger.info('Building agent-runner...');
+      execSync('npm run build', { cwd: agentRunnerDir, stdio: 'inherit' });
+    }
+    logger.info('Native mode enabled, skipping container runtime and credential proxy');
+  } else {
+    ensureContainerSystemRunning();
+  }
+
   initDatabase();
   logger.info('Database initialized');
   loadState();
   restoreRemoteControl();
 
   // Start credential proxy (containers route API calls through this)
-  const proxyServer = await startCredentialProxy(
-    CREDENTIAL_PROXY_PORT,
-    PROXY_BIND_HOST,
-  );
+  const proxyServer = NATIVE_MODE
+    ? null
+    : await startCredentialProxy(CREDENTIAL_PROXY_PORT, PROXY_BIND_HOST);
 
   // Graceful shutdown handlers
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutdown signal received');
-    proxyServer.close();
+    proxyServer?.close();
     await queue.shutdown(10000);
     for (const ch of channels) await ch.disconnect();
     process.exit(0);
