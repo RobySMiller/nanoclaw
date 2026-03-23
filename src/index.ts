@@ -58,6 +58,7 @@ import {
   loadSenderAllowlist,
   shouldDropMessage,
 } from './sender-allowlist.js';
+import { isLocalAlive, startHeartbeatReceiver, startHeartbeatSender, stopHeartbeatSender } from './heartbeat.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
@@ -311,6 +312,12 @@ async function runAgent(
       }
     : undefined;
 
+  // Hybrid mode: Railway skips processing when local instance is alive
+  if (process.env.RAILWAY_ENVIRONMENT && isLocalAlive()) {
+    logger.info({ group: group.name }, 'Skipping — local instance is active');
+    return 'success';
+  }
+
   try {
     const runner = NATIVE_MODE ? runNativeAgent : runContainerAgent;
     const output = await runner(
@@ -488,9 +495,7 @@ async function main(): Promise<void> {
       logger.info('Building agent-runner...');
       execSync('npm run build', { cwd: agentRunnerDir, stdio: 'inherit' });
     }
-    logger.info(
-      'Native mode enabled, skipping container runtime check',
-    );
+    logger.info('Native mode enabled, skipping container runtime check');
   } else {
     ensureContainerSystemRunning();
   }
@@ -506,10 +511,20 @@ async function main(): Promise<void> {
     NATIVE_MODE ? '127.0.0.1' : PROXY_BIND_HOST,
   );
 
+  // Hybrid heartbeat system: Railway receives heartbeats, local sends them
+  let heartbeatServer: ReturnType<typeof startHeartbeatReceiver> | undefined;
+  if (process.env.RAILWAY_ENVIRONMENT && process.env.PORT) {
+    heartbeatServer = startHeartbeatReceiver(parseInt(process.env.PORT, 10));
+  } else if (process.env.HEARTBEAT_TARGET_URL) {
+    startHeartbeatSender(process.env.HEARTBEAT_TARGET_URL);
+  }
+
   // Graceful shutdown handlers
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutdown signal received');
     proxyServer?.close();
+    heartbeatServer?.close();
+    stopHeartbeatSender();
     await queue.shutdown(10000);
     for (const ch of channels) await ch.disconnect();
     process.exit(0);
