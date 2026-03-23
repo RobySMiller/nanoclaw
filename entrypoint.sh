@@ -89,4 +89,14 @@ if [ -n "$SLACK_DM_JID" ]; then
   fi
 fi
 
-exec node dist/index.js
+# Pre-configure Claude CLI for the node user (skip first-run wizard)
+mkdir -p /home/node/.claude
+echo '{"theme":"dark","hasCompletedOnboarding":true,"hasAcknowledgedDisclaimer":true}' > /home/node/.claude/user_settings.json
+
+# Own all runtime directories by non-root user
+# Include persistent volume (symlink targets) so node user can write
+chown -R node:node /app/persistent /home/node/.claude 2>/dev/null || true
+
+# Drop to non-root user for the main process.
+# Claude Code refuses --dangerously-skip-permissions when running as root.
+exec gosu node node dist/index.js

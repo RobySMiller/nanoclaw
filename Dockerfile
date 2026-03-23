@@ -1,13 +1,9 @@
 FROM node:22-slim
 
-RUN apt-get update && apt-get install -y curl git && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y curl git gosu && rm -rf /var/lib/apt/lists/*
 
 # Install claude-code globally
 RUN npm install -g @anthropic-ai/claude-code
-
-# Pre-configure Claude CLI to skip first-run wizard
-RUN mkdir -p /root/.claude && \
-    echo '{"theme":"dark","hasCompletedOnboarding":true,"hasAcknowledgedDisclaimer":true}' > /root/.claude/user_settings.json
 
 WORKDIR /app
 
