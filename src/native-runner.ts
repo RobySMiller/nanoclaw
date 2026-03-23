@@ -158,6 +158,14 @@ export async function runNativeAgent(
     env.NODE_ENV = process.env.NODE_ENV;
   }
 
+  // Pass through MCP server credentials
+  if (process.env.GITHUB_PERSONAL_ACCESS_TOKEN) {
+    env.GITHUB_PERSONAL_ACCESS_TOKEN = process.env.GITHUB_PERSONAL_ACCESS_TOKEN;
+  }
+  if (process.env.LINEAR_API_KEY) {
+    env.LINEAR_API_KEY = process.env.LINEAR_API_KEY;
+  }
+
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const processName = `nanoclaw-native-${safeName}-${Date.now()}`;
 

@@ -2,8 +2,8 @@ FROM node:22-slim
 
 RUN apt-get update && apt-get install -y curl git gosu && rm -rf /var/lib/apt/lists/*
 
-# Install claude-code globally
-RUN npm install -g @anthropic-ai/claude-code
+# Install claude-code and MCP servers globally
+RUN npm install -g @anthropic-ai/claude-code @modelcontextprotocol/server-github linear-mcp-server
 
 WORKDIR /app
 

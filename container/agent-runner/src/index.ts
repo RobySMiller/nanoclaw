@@ -412,7 +412,9 @@ async function runQuery(
         'TeamCreate', 'TeamDelete', 'SendMessage',
         'TodoWrite', 'ToolSearch', 'Skill',
         'NotebookEdit',
-        'mcp__nanoclaw__*'
+        'mcp__nanoclaw__*',
+        'mcp__github__*',
+        'mcp__linear__*'
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
@@ -428,6 +430,24 @@ async function runQuery(
             NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
           },
         },
+        ...(process.env.GITHUB_PERSONAL_ACCESS_TOKEN ? {
+          github: {
+            command: 'mcp-server-github',
+            args: [],
+            env: {
+              GITHUB_PERSONAL_ACCESS_TOKEN: process.env.GITHUB_PERSONAL_ACCESS_TOKEN,
+            },
+          },
+        } : {}),
+        ...(process.env.LINEAR_API_KEY ? {
+          linear: {
+            command: 'linear-mcp-server',
+            args: [],
+            env: {
+              LINEAR_API_KEY: process.env.LINEAR_API_KEY,
+            },
+          },
+        } : {}),
       },
       hooks: {
         PreCompact: [{ hooks: [createPreCompactHook(containerInput.assistantName)] }],
