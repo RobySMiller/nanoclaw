@@ -22,6 +22,7 @@ import {
   writeGroupsSnapshot,
   writeTasksSnapshot,
 } from './container-runner.js';
+import { readEnvFile } from './env.js';
 import {
   cleanupOrphans,
   ensureContainerRuntimeRunning,
@@ -58,7 +59,12 @@ import {
   loadSenderAllowlist,
   shouldDropMessage,
 } from './sender-allowlist.js';
-import { isLocalAlive, startHeartbeatReceiver, startHeartbeatSender, stopHeartbeatSender } from './heartbeat.js';
+import {
+  isLocalAlive,
+  startHeartbeatReceiver,
+  startHeartbeatSender,
+  stopHeartbeatSender,
+} from './heartbeat.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
@@ -515,8 +521,13 @@ async function main(): Promise<void> {
   let heartbeatServer: ReturnType<typeof startHeartbeatReceiver> | undefined;
   if (process.env.RAILWAY_ENVIRONMENT && process.env.PORT) {
     heartbeatServer = startHeartbeatReceiver(parseInt(process.env.PORT, 10));
-  } else if (process.env.HEARTBEAT_TARGET_URL) {
-    startHeartbeatSender(process.env.HEARTBEAT_TARGET_URL);
+  } else {
+    const heartbeatUrl =
+      process.env.HEARTBEAT_TARGET_URL ||
+      readEnvFile(['HEARTBEAT_TARGET_URL']).HEARTBEAT_TARGET_URL;
+    if (heartbeatUrl) {
+      startHeartbeatSender(heartbeatUrl);
+    }
   }
 
   // Graceful shutdown handlers
