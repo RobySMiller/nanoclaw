@@ -432,6 +432,10 @@ async function runQuery(
       hooks: {
         PreCompact: [{ hooks: [createPreCompactHook(containerInput.assistantName)] }],
       },
+      debug: true,
+      stderr: (data: string) => {
+        log(`[claude stderr] ${data}`);
+      },
     }
   })) {
     messageCount++;
