@@ -10,11 +10,26 @@ if [ -d /app/persistent ]; then
   done
 fi
 
+# Clean up any corrupted DB from failed prior deploys
+if [ -f store/messages.db ]; then
+  node -e "
+    try {
+      const Database = require('better-sqlite3');
+      const db = new Database('store/messages.db');
+      const cols = db.pragma('table_info(registered_groups)').map(c => c.name);
+      if (cols.length > 0 && !cols.includes('added_at')) {
+        console.log('Dropping corrupted registered_groups table');
+        db.exec('DROP TABLE registered_groups');
+      }
+      db.close();
+    } catch(e) {}
+  " 2>/dev/null || true
+fi
+
 # Auto-register Slack channel if not already in DB
 if [ -n "$SLACK_CHANNEL_JID" ]; then
   mkdir -p store
 
-  # Check if already registered (skip if DB doesn't exist yet)
   NEEDS_REGISTER="yes"
   if [ -f store/messages.db ]; then
     EXISTING=$(node -e "
@@ -31,7 +46,6 @@ if [ -n "$SLACK_CHANNEL_JID" ]; then
 
   if [ "$NEEDS_REGISTER" = "yes" ]; then
     echo "Auto-registering Slack channel: $SLACK_CHANNEL_JID"
-    # Let NanoClaw initialize the DB with proper schema first
     node -e "const { initDatabase } = require('./dist/db.js'); initDatabase();" 2>/dev/null || true
     npx tsx setup/index.ts --step register -- \
       --jid "$SLACK_CHANNEL_JID" \
