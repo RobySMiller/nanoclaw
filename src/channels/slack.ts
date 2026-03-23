@@ -59,7 +59,7 @@ export class SlackChannel implements Channel {
       token: botToken,
       appToken,
       socketMode: true,
-      logLevel: LogLevel.ERROR,
+      logLevel: LogLevel.DEBUG,
     });
 
     this.setupEventHandlers();
@@ -69,6 +69,7 @@ export class SlackChannel implements Channel {
     // Use app.event('message') instead of app.message() to capture all
     // message subtypes including bot_message (needed to track our own output)
     this.app.event('message', async ({ event }) => {
+      logger.info({ event: JSON.stringify(event).slice(0, 300) }, 'Slack event received');
       // Bolt's event type is the full MessageEvent union (17+ subtypes).
       // We filter on subtype first, then narrow to the two types we handle.
       const subtype = (event as { subtype?: string }).subtype;
