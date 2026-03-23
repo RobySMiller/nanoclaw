@@ -13,9 +13,13 @@ export function readEnvFile(keys: string[]): Record<string, string> {
   let content: string;
   try {
     content = fs.readFileSync(envFile, 'utf-8');
-  } catch (err) {
-    logger.debug({ err }, '.env file not found, using defaults');
-    return {};
+  } catch {
+    // No .env file — fall back to process.env (e.g., Railway injects env vars)
+    const result: Record<string, string> = {};
+    for (const key of keys) {
+      if (process.env[key]) result[key] = process.env[key]!;
+    }
+    return result;
   }
 
   const result: Record<string, string> = {};
