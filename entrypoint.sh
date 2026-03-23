@@ -13,17 +13,26 @@ fi
 # Auto-register Slack channel if not already in DB
 if [ -n "$SLACK_CHANNEL_JID" ]; then
   mkdir -p store
-  EXISTING=$(node -e "
-    const Database = require('better-sqlite3');
-    const db = new Database('store/messages.db');
-    db.exec('CREATE TABLE IF NOT EXISTS registered_groups (jid TEXT PRIMARY KEY, name TEXT, folder TEXT, trigger_pattern TEXT, requires_trigger INTEGER, channel TEXT, is_main INTEGER, container_config TEXT)');
-    const row = db.prepare('SELECT jid FROM registered_groups WHERE jid = ?').get(process.env.SLACK_CHANNEL_JID);
-    console.log(row ? 'yes' : 'no');
-    db.close();
-  " 2>/dev/null || echo "no")
 
-  if [ "$EXISTING" = "no" ]; then
+  # Check if already registered (skip if DB doesn't exist yet)
+  NEEDS_REGISTER="yes"
+  if [ -f store/messages.db ]; then
+    EXISTING=$(node -e "
+      try {
+        const Database = require('better-sqlite3');
+        const db = new Database('store/messages.db');
+        const row = db.prepare('SELECT jid FROM registered_groups WHERE jid = ?').get(process.env.SLACK_CHANNEL_JID);
+        console.log(row ? 'no' : 'yes');
+        db.close();
+      } catch(e) { console.log('yes'); }
+    " 2>/dev/null || echo "yes")
+    NEEDS_REGISTER="$EXISTING"
+  fi
+
+  if [ "$NEEDS_REGISTER" = "yes" ]; then
     echo "Auto-registering Slack channel: $SLACK_CHANNEL_JID"
+    # Let NanoClaw initialize the DB with proper schema first
+    node -e "const { initDatabase } = require('./dist/db.js'); initDatabase();" 2>/dev/null || true
     npx tsx setup/index.ts --step register -- \
       --jid "$SLACK_CHANNEL_JID" \
       --name "${SLACK_CHANNEL_NAME:-nanoclaw}" \
