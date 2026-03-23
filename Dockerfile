@@ -24,4 +24,7 @@ RUN npm run build && cd container/agent-runner && npm run build
 ENV NATIVE_MODE=true
 ENV NODE_ENV=production
 
-CMD ["node", "dist/index.js"]
+COPY entrypoint.sh ./
+RUN chmod +x entrypoint.sh
+
+CMD ["./entrypoint.sh"]
