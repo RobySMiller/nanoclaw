@@ -7,12 +7,13 @@ import { ChildProcess, spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
-import { DATA_DIR, GROUPS_DIR, TIMEZONE } from './config.js';
+import { CREDENTIAL_PROXY_PORT, DATA_DIR, GROUPS_DIR, TIMEZONE } from './config.js';
 import {
   ContainerInput,
   ContainerOutput,
   handleAgentProcess,
 } from './container-runner.js';
+import { detectAuthMode } from './credential-proxy.js';
 import { readEnvFile } from './env.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
@@ -85,7 +86,10 @@ export async function runNativeAgent(
         if (fs.existsSync(linkPath)) fs.unlinkSync(linkPath);
         fs.symlinkSync(hostPath, linkPath);
       } catch (err) {
-        logger.warn({ hostPath, linkPath, err }, 'Failed to create symlink for extra mount');
+        logger.warn(
+          { hostPath, linkPath, err },
+          'Failed to create symlink for extra mount',
+        );
       }
     }
     extraDir = extraBase;
@@ -104,14 +108,11 @@ export async function runNativeAgent(
     );
   }
 
-  const secrets = readEnvFile([
-    'ANTHROPIC_API_KEY',
-    'CLAUDE_CODE_OAUTH_TOKEN',
-    'ANTHROPIC_AUTH_TOKEN',
-    'ANTHROPIC_BASE_URL',
-  ]);
-
   const homeDir = path.join(DATA_DIR, 'sessions', group.folder);
+
+  // Route API calls through the credential proxy (same as container mode).
+  // The proxy injects real credentials; the agent only sees placeholders.
+  const authMode = detectAuthMode();
 
   const env: Record<string, string> = {
     TZ: TIMEZONE,
@@ -120,23 +121,18 @@ export async function runNativeAgent(
     NANOCLAW_WORKSPACE_GROUP: groupDir,
     NANOCLAW_WORKSPACE_IPC: groupIpcDir,
     NANOCLAW_WORKSPACE_GLOBAL: globalDir,
+    ANTHROPIC_BASE_URL: `http://127.0.0.1:${CREDENTIAL_PROXY_PORT}`,
   };
+
+  // Mirror host auth mode with placeholder values (proxy injects real ones)
+  if (authMode === 'api-key') {
+    env.ANTHROPIC_API_KEY = 'placeholder';
+  } else {
+    env.CLAUDE_CODE_OAUTH_TOKEN = 'placeholder';
+  }
 
   if (extraDir) {
     env.NANOCLAW_WORKSPACE_EXTRA = extraDir;
-  }
-
-  if (secrets.ANTHROPIC_API_KEY) {
-    env.ANTHROPIC_API_KEY = secrets.ANTHROPIC_API_KEY;
-  }
-  if (secrets.CLAUDE_CODE_OAUTH_TOKEN) {
-    env.CLAUDE_CODE_OAUTH_TOKEN = secrets.CLAUDE_CODE_OAUTH_TOKEN;
-  }
-  if (secrets.ANTHROPIC_AUTH_TOKEN) {
-    env.ANTHROPIC_AUTH_TOKEN = secrets.ANTHROPIC_AUTH_TOKEN;
-  }
-  if (secrets.ANTHROPIC_BASE_URL) {
-    env.ANTHROPIC_BASE_URL = secrets.ANTHROPIC_BASE_URL;
   }
 
   // Pass through NODE_ENV if set

@@ -475,7 +475,11 @@ function ensureContainerSystemRunning(): void {
 async function main(): Promise<void> {
   if (NATIVE_MODE) {
     const { execSync } = await import('child_process');
-    const agentRunnerDir = path.join(process.cwd(), 'container', 'agent-runner');
+    const agentRunnerDir = path.join(
+      process.cwd(),
+      'container',
+      'agent-runner',
+    );
     if (!fs.existsSync(path.join(agentRunnerDir, 'node_modules'))) {
       logger.info('Installing agent-runner dependencies...');
       execSync('npm install', { cwd: agentRunnerDir, stdio: 'inherit' });
@@ -484,7 +488,9 @@ async function main(): Promise<void> {
       logger.info('Building agent-runner...');
       execSync('npm run build', { cwd: agentRunnerDir, stdio: 'inherit' });
     }
-    logger.info('Native mode enabled, skipping container runtime and credential proxy');
+    logger.info(
+      'Native mode enabled, skipping container runtime check',
+    );
   } else {
     ensureContainerSystemRunning();
   }
@@ -494,10 +500,11 @@ async function main(): Promise<void> {
   loadState();
   restoreRemoteControl();
 
-  // Start credential proxy (containers route API calls through this)
-  const proxyServer = NATIVE_MODE
-    ? null
-    : await startCredentialProxy(CREDENTIAL_PROXY_PORT, PROXY_BIND_HOST);
+  // Start credential proxy (both container and native mode route API calls through this)
+  const proxyServer = await startCredentialProxy(
+    CREDENTIAL_PROXY_PORT,
+    NATIVE_MODE ? '127.0.0.1' : PROXY_BIND_HOST,
+  );
 
   // Graceful shutdown handlers
   const shutdown = async (signal: string) => {
