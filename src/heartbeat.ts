@@ -1,8 +1,9 @@
 /**
  * Heartbeat system for hybrid local/Railway deployment.
  *
- * - Railway instance: listens for heartbeats on PORT, skips message
- *   processing when local is alive.
+ * - Railway instance: listens for heartbeats on PORT. When local is alive,
+ *   Railway disconnects from Slack so only local processes messages.
+ *   When heartbeats stop, Railway reconnects.
  * - Local instance: sends heartbeats to HEARTBEAT_TARGET_URL every 10s.
  */
 import http from 'http';
@@ -11,13 +12,20 @@ import { logger } from './logger.js';
 
 const HEARTBEAT_INTERVAL = 10_000; // 10 seconds
 const HEARTBEAT_TIMEOUT = 30_000; // 30 seconds — local considered dead after this
+const HEARTBEAT_CHECK_INTERVAL = 5_000; // check state every 5s
 
 let lastHeartbeat = 0;
 let heartbeatTimer: NodeJS.Timeout | null = null;
+let stateCheckTimer: NodeJS.Timeout | null = null;
+let wasLocalAlive = false;
 
 // ── Receiver (Railway) ──────────────────────────────────────────────
 
-export function startHeartbeatReceiver(port: number): http.Server {
+export function startHeartbeatReceiver(
+  port: number,
+  onLocalAlive: () => void,
+  onLocalDead: () => void,
+): http.Server {
   const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/heartbeat') {
       lastHeartbeat = Date.now();
@@ -46,6 +54,20 @@ export function startHeartbeatReceiver(port: number): http.Server {
     logger.info({ port }, 'Heartbeat receiver listening');
   });
 
+  // Poll for state transitions
+  stateCheckTimer = setInterval(() => {
+    const alive = isLocalAlive();
+    if (alive && !wasLocalAlive) {
+      logger.info('Local instance came online — yielding Slack connection');
+      wasLocalAlive = true;
+      onLocalAlive();
+    } else if (!alive && wasLocalAlive) {
+      logger.info('Local instance went offline — taking over Slack connection');
+      wasLocalAlive = false;
+      onLocalDead();
+    }
+  }, HEARTBEAT_CHECK_INTERVAL);
+
   return server;
 }
 
@@ -71,12 +93,19 @@ export function startHeartbeatSender(targetUrl: string): void {
 
   heartbeatTimer = setInterval(send, HEARTBEAT_INTERVAL);
   send(); // immediate first beat
-  logger.info({ targetUrl, intervalMs: HEARTBEAT_INTERVAL }, 'Heartbeat sender started');
+  logger.info(
+    { targetUrl, intervalMs: HEARTBEAT_INTERVAL },
+    'Heartbeat sender started',
+  );
 }
 
 export function stopHeartbeatSender(): void {
   if (heartbeatTimer) {
     clearInterval(heartbeatTimer);
     heartbeatTimer = null;
+  }
+  if (stateCheckTimer) {
+    clearInterval(stateCheckTimer);
+    stateCheckTimer = null;
   }
 }
