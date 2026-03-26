@@ -2,9 +2,16 @@
  * Heartbeat system for hybrid local/Railway deployment.
  *
  * - Railway instance: listens for heartbeats on PORT. When local is alive,
- *   Railway disconnects from Slack so only local processes messages.
+ *   Railway disconnects from channels so only local processes messages.
  *   When heartbeats stop, Railway reconnects.
  * - Local instance: sends heartbeats to HEARTBEAT_TARGET_URL every 10s.
+ *
+ * Uses a 5-state machine for flap protection:
+ *   UNKNOWN    → initial, never heard from local
+ *   HEALTHY    → heartbeats arriving normally (local is alive)
+ *   SUSPECT    → heartbeats missed, not yet failed over
+ *   FAILED     → local is dead, Railway has taken over
+ *   RECOVERING → heartbeats resumed, waiting for stability before yielding
  */
 import http from 'http';
 
@@ -13,11 +20,29 @@ import { logger } from './logger.js';
 const HEARTBEAT_INTERVAL = 10_000; // 10 seconds
 const HEARTBEAT_TIMEOUT = 30_000; // 30 seconds — local considered dead after this
 const HEARTBEAT_CHECK_INTERVAL = 5_000; // check state every 5s
+const FAILOVER_THRESHOLD = 3; // consecutive misses before SUSPECT → FAILED
+const RECOVERY_THRESHOLD = 3; // consecutive alive checks before RECOVERING → HEALTHY
 
+// ── State Machine ───────────────────────────────────────────────────
+
+type State = 'UNKNOWN' | 'HEALTHY' | 'SUSPECT' | 'FAILED' | 'RECOVERING';
+
+let state: State = 'UNKNOWN';
 let lastHeartbeat = 0;
+let consecutiveMisses = 0;
+let consecutiveAlive = 0;
+let startedAt = 0;
+
 let heartbeatTimer: NodeJS.Timeout | null = null;
 let stateCheckTimer: NodeJS.Timeout | null = null;
-let wasLocalAlive = false;
+
+function resetState(): void {
+  state = 'UNKNOWN';
+  lastHeartbeat = 0;
+  consecutiveMisses = 0;
+  consecutiveAlive = 0;
+  startedAt = 0;
+}
 
 // ── Receiver (Railway) ──────────────────────────────────────────────
 
@@ -26,6 +51,8 @@ export function startHeartbeatReceiver(
   onLocalAlive: () => void,
   onLocalDead: () => void,
 ): http.Server {
+  startedAt = Date.now();
+
   const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/heartbeat') {
       lastHeartbeat = Date.now();
@@ -39,7 +66,8 @@ export function startHeartbeatReceiver(
       res.end(
         JSON.stringify({
           status: 'ok',
-          localAlive: isLocalAlive(),
+          state,
+          localAlive: state === 'HEALTHY' || state === 'RECOVERING',
           lastHeartbeat: lastHeartbeat || null,
         }),
       );
@@ -54,26 +82,102 @@ export function startHeartbeatReceiver(
     logger.info({ port }, 'Heartbeat receiver listening');
   });
 
-  // Poll for state transitions
+  // Drive the state machine on a regular interval
   stateCheckTimer = setInterval(() => {
-    const alive = isLocalAlive();
-    if (alive && !wasLocalAlive) {
-      logger.info('Local instance came online — yielding Slack connection');
-      wasLocalAlive = true;
-      onLocalAlive();
-    } else if (!alive && wasLocalAlive) {
-      logger.info('Local instance went offline — taking over Slack connection');
-      wasLocalAlive = false;
-      onLocalDead();
+    const now = Date.now();
+    const alive =
+      lastHeartbeat > 0 && now - lastHeartbeat < HEARTBEAT_TIMEOUT;
+
+    if (alive) {
+      consecutiveAlive++;
+      consecutiveMisses = 0;
+    } else {
+      consecutiveMisses++;
+      consecutiveAlive = 0;
+    }
+
+    switch (state) {
+      case 'UNKNOWN':
+        if (alive) {
+          state = 'HEALTHY';
+          logger.info('Local instance came online');
+          onLocalAlive();
+        } else if (now - startedAt >= HEARTBEAT_TIMEOUT) {
+          state = 'FAILED';
+          logger.info('No local instance detected — taking over');
+          onLocalDead();
+        }
+        break;
+
+      case 'HEALTHY':
+        if (!alive) {
+          if (consecutiveMisses >= FAILOVER_THRESHOLD) {
+            state = 'FAILED';
+            logger.warn('Local instance went offline — taking over');
+            onLocalDead();
+          } else {
+            state = 'SUSPECT';
+            logger.info(
+              { misses: consecutiveMisses, threshold: FAILOVER_THRESHOLD },
+              'Heartbeat missed — entering SUSPECT',
+            );
+          }
+        }
+        break;
+
+      case 'SUSPECT':
+        if (alive) {
+          state = 'HEALTHY';
+          logger.info('Heartbeat resumed — back to HEALTHY');
+        } else if (consecutiveMisses >= FAILOVER_THRESHOLD) {
+          state = 'FAILED';
+          logger.warn('Local instance went offline — taking over');
+          onLocalDead();
+        }
+        break;
+
+      case 'FAILED':
+        if (alive) {
+          consecutiveAlive = 1;
+          if (RECOVERY_THRESHOLD <= 1) {
+            state = 'HEALTHY';
+            logger.info('Local instance is back — yielding');
+            onLocalAlive();
+          } else {
+            state = 'RECOVERING';
+            logger.info(
+              { needed: RECOVERY_THRESHOLD },
+              'Local instance heartbeat detected — entering RECOVERING',
+            );
+          }
+        }
+        break;
+
+      case 'RECOVERING':
+        if (!alive) {
+          state = 'FAILED';
+          consecutiveAlive = 0;
+          logger.warn('Heartbeat lost during recovery — back to FAILED');
+        } else if (consecutiveAlive >= RECOVERY_THRESHOLD) {
+          state = 'HEALTHY';
+          logger.info('Local instance is stable — yielding');
+          onLocalAlive();
+        }
+        break;
     }
   }, HEARTBEAT_CHECK_INTERVAL);
 
   return server;
 }
 
-/** Returns true if the local instance sent a heartbeat recently. */
+/** Returns true if the local instance is considered alive (HEALTHY or RECOVERING). */
 export function isLocalAlive(): boolean {
-  return lastHeartbeat > 0 && Date.now() - lastHeartbeat < HEARTBEAT_TIMEOUT;
+  return state === 'HEALTHY' || state === 'RECOVERING';
+}
+
+/** Returns the current state machine state. */
+export function getHeartbeatState(): State {
+  return state;
 }
 
 // ── Sender (local) ─────────────────────────────────────────────────
@@ -108,4 +212,5 @@ export function stopHeartbeatSender(): void {
     clearInterval(stateCheckTimer);
     stateCheckTimer = null;
   }
+  resetState();
 }
