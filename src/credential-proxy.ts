@@ -9,6 +9,7 @@
  *             API key via /api/oauth/claude_cli/create_api_key.
  *             Proxy injects real OAuth token on that exchange request;
  *             subsequent requests carry the temp key which is valid as-is.
+ *             Token is auto-refreshed before expiry using the refresh token.
  */
 import { createServer, Server } from 'http';
 import { request as httpsRequest } from 'https';
@@ -23,6 +24,116 @@ export interface ProxyConfig {
   authMode: AuthMode;
 }
 
+// ── OAuth Token Refresh ─────────────────────────────────────────────
+
+const TOKEN_URL = 'https://platform.claude.com/v1/oauth/token';
+const CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
+const SCOPES = 'user:profile user:inference user:sessions:claude_code user:mcp_servers';
+const REFRESH_MARGIN_MS = 5 * 60 * 1000; // refresh 5 minutes before expiry
+
+interface OAuthState {
+  accessToken: string;
+  refreshToken: string;
+  expiresAt: number; // epoch ms
+}
+
+let oauthState: OAuthState | null = null;
+let refreshTimer: NodeJS.Timeout | null = null;
+
+async function refreshAccessToken(): Promise<void> {
+  if (!oauthState) return;
+
+  const body = JSON.stringify({
+    grant_type: 'refresh_token',
+    refresh_token: oauthState.refreshToken,
+    client_id: CLIENT_ID,
+    scope: SCOPES,
+  });
+
+  try {
+    const response = await fetch(TOKEN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+      signal: AbortSignal.timeout(15_000),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      logger.error(
+        { status: response.status, body: text },
+        'OAuth token refresh failed',
+      );
+      return;
+    }
+
+    const data = (await response.json()) as {
+      access_token?: string;
+      refresh_token?: string;
+      expires_in?: number;
+    };
+
+    if (!data.access_token) {
+      logger.error({ data }, 'OAuth refresh response missing access_token');
+      return;
+    }
+
+    oauthState.accessToken = data.access_token;
+    if (data.refresh_token) {
+      oauthState.refreshToken = data.refresh_token;
+    }
+    if (data.expires_in) {
+      oauthState.expiresAt = Date.now() + data.expires_in * 1000;
+    }
+
+    scheduleRefresh();
+
+    logger.info(
+      { expiresIn: data.expires_in ? `${Math.round(data.expires_in / 60)}m` : 'unknown' },
+      'OAuth token refreshed',
+    );
+  } catch (err) {
+    logger.error({ err }, 'OAuth token refresh error');
+  }
+}
+
+function scheduleRefresh(): void {
+  if (refreshTimer) clearTimeout(refreshTimer);
+  if (!oauthState) return;
+
+  const delay = Math.max(0, oauthState.expiresAt - Date.now() - REFRESH_MARGIN_MS);
+  refreshTimer = setTimeout(() => {
+    refreshAccessToken();
+  }, delay);
+
+  const mins = Math.round(delay / 60_000);
+  logger.info({ refreshInMinutes: mins }, 'OAuth refresh scheduled');
+}
+
+function initOAuthState(secrets: Record<string, string>): void {
+  const accessToken =
+    secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.ANTHROPIC_AUTH_TOKEN;
+  const refreshToken = secrets.CLAUDE_CODE_OAUTH_REFRESH_TOKEN;
+
+  if (!accessToken || !refreshToken) return;
+
+  const expiresAt = secrets.CLAUDE_CODE_OAUTH_EXPIRES_AT
+    ? parseInt(secrets.CLAUDE_CODE_OAUTH_EXPIRES_AT, 10)
+    : Date.now() + 3600 * 1000; // default 1h if unknown
+
+  oauthState = { accessToken, refreshToken, expiresAt };
+
+  // If already expired or expiring soon, refresh immediately
+  if (Date.now() >= expiresAt - REFRESH_MARGIN_MS) {
+    logger.info('OAuth token expired or expiring soon, refreshing now');
+    refreshAccessToken();
+  } else {
+    scheduleRefresh();
+  }
+}
+
+// ── Proxy Server ────────────────────────────────────────────────────
+
 export function startCredentialProxy(
   port: number,
   host = '127.0.0.1',
@@ -32,11 +143,15 @@ export function startCredentialProxy(
     'CLAUDE_CODE_OAUTH_TOKEN',
     'ANTHROPIC_AUTH_TOKEN',
     'ANTHROPIC_BASE_URL',
+    'CLAUDE_CODE_OAUTH_REFRESH_TOKEN',
+    'CLAUDE_CODE_OAUTH_EXPIRES_AT',
   ]);
 
   const authMode: AuthMode = secrets.ANTHROPIC_API_KEY ? 'api-key' : 'oauth';
-  const oauthToken =
-    secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.ANTHROPIC_AUTH_TOKEN;
+
+  if (authMode === 'oauth') {
+    initOAuthState(secrets);
+  }
 
   const upstreamUrl = new URL(
     secrets.ANTHROPIC_BASE_URL || 'https://api.anthropic.com',
@@ -71,10 +186,13 @@ export function startCredentialProxy(
           // only when the container actually sends an Authorization header
           // (exchange request + auth probes). Post-exchange requests use
           // x-api-key only, so they pass through without token injection.
+          const currentToken = oauthState?.accessToken
+            ?? secrets.CLAUDE_CODE_OAUTH_TOKEN
+            ?? secrets.ANTHROPIC_AUTH_TOKEN;
           if (headers['authorization']) {
             delete headers['authorization'];
-            if (oauthToken) {
-              headers['authorization'] = `Bearer ${oauthToken}`;
+            if (currentToken) {
+              headers['authorization'] = `Bearer ${currentToken}`;
             }
           }
         }
