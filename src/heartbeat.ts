@@ -21,7 +21,8 @@ const HEARTBEAT_INTERVAL = 10_000; // 10 seconds
 const HEARTBEAT_TIMEOUT = 30_000; // 30 seconds — local considered dead after this
 const HEARTBEAT_CHECK_INTERVAL = 5_000; // check state every 5s
 const FAILOVER_THRESHOLD = 3; // consecutive misses before SUSPECT → FAILED
-const RECOVERY_THRESHOLD = 3; // consecutive alive checks before RECOVERING → HEALTHY
+const RECOVERY_THRESHOLD = 6; // consecutive alive checks before RECOVERING → HEALTHY (~30s)
+const SUSPECT_CLEAR_THRESHOLD = 2; // consecutive alive checks to exit SUSPECT → HEALTHY
 
 // ── State Machine ───────────────────────────────────────────────────
 
@@ -85,8 +86,7 @@ export function startHeartbeatReceiver(
   // Drive the state machine on a regular interval
   stateCheckTimer = setInterval(() => {
     const now = Date.now();
-    const alive =
-      lastHeartbeat > 0 && now - lastHeartbeat < HEARTBEAT_TIMEOUT;
+    const alive = lastHeartbeat > 0 && now - lastHeartbeat < HEARTBEAT_TIMEOUT;
 
     if (alive) {
       consecutiveAlive++;
@@ -126,10 +126,10 @@ export function startHeartbeatReceiver(
         break;
 
       case 'SUSPECT':
-        if (alive) {
+        if (alive && consecutiveAlive >= SUSPECT_CLEAR_THRESHOLD) {
           state = 'HEALTHY';
           logger.info('Heartbeat resumed — back to HEALTHY');
-        } else if (consecutiveMisses >= FAILOVER_THRESHOLD) {
+        } else if (!alive && consecutiveMisses >= FAILOVER_THRESHOLD) {
           state = 'FAILED';
           logger.warn('Local instance went offline — taking over');
           onLocalDead();
