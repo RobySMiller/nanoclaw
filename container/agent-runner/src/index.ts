@@ -396,6 +396,13 @@ async function runQuery(
     log(`Additional directories: ${extraDirs.join(', ')}`);
   }
 
+  // When running on API credits (Railway failover), tell the agent to be conservative
+  const authMode = process.env.NANOCLAW_AUTH_MODE;
+  let systemAppend = globalClaudeMd || '';
+  if (authMode === 'api-key') {
+    systemAppend += `\n\n## Cost Awareness\n\nYou are currently running on metered API credits (not the subscription). Keep responses concise. Avoid launching sub-agents, large web searches, or multi-step research tasks. If the user asks for something that would be expensive (big code tasks, deep research, multi-file refactors), let them know you're on API credits and suggest they try again when the local instance is back online.`;
+  }
+
   for await (const message of query({
     prompt: stream,
     options: {
@@ -403,8 +410,8 @@ async function runQuery(
       additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
       resume: sessionId,
       resumeSessionAt: resumeAt,
-      systemPrompt: globalClaudeMd
-        ? { type: 'preset' as const, preset: 'claude_code' as const, append: globalClaudeMd }
+      systemPrompt: systemAppend
+        ? { type: 'preset' as const, preset: 'claude_code' as const, append: systemAppend }
         : undefined,
       allowedTools: [
         'Bash',

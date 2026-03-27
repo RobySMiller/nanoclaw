@@ -143,6 +143,7 @@ export async function runNativeAgent(
   };
 
   // Mirror host auth mode with placeholder values (proxy injects real ones)
+  env.NANOCLAW_AUTH_MODE = authMode;
   if (authMode === 'api-key') {
     env.ANTHROPIC_API_KEY = 'placeholder';
   } else {
@@ -164,6 +165,18 @@ export async function runNativeAgent(
   }
   if (process.env.LINEAR_API_KEY) {
     env.LINEAR_API_KEY = process.env.LINEAR_API_KEY;
+  }
+
+  // Pass Granola cache path if available
+  const granolaCachePath = path.join(
+    process.env.HOME || '',
+    'Library',
+    'Application Support',
+    'Granola',
+    'cache-v6.json',
+  );
+  if (fs.existsSync(granolaCachePath)) {
+    env.GRANOLA_CACHE_PATH = granolaCachePath;
   }
 
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');

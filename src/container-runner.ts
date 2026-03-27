@@ -199,6 +199,21 @@ function buildVolumeMounts(
     readonly: false,
   });
 
+  // Mount Granola cache directory if present (read-only)
+  const granolaCacheDir = path.join(
+    process.env.HOME || '/root',
+    'Library',
+    'Application Support',
+    'Granola',
+  );
+  if (fs.existsSync(granolaCacheDir)) {
+    mounts.push({
+      hostPath: granolaCacheDir,
+      containerPath: '/workspace/extra/granola',
+      readonly: true,
+    });
+  }
+
   // Additional mounts validated against external allowlist (tamper-proof from containers)
   if (group.containerConfig?.additionalMounts) {
     const validatedMounts = validateAdditionalMounts(
@@ -232,10 +247,39 @@ function buildContainerArgs(
   // OAuth mode:   SDK exchanges placeholder token for temp API key,
   //               proxy injects real OAuth token on that exchange request.
   const authMode = detectAuthMode();
+  args.push('-e', `NANOCLAW_AUTH_MODE=${authMode}`);
   if (authMode === 'api-key') {
     args.push('-e', 'ANTHROPIC_API_KEY=placeholder');
   } else {
     args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
+  }
+
+  // Pass Granola cache path if available
+  const granolaCacheDir = path.join(
+    process.env.HOME || '/root',
+    'Library',
+    'Application Support',
+    'Granola',
+  );
+  const granolaCachePath = path.join(granolaCacheDir, 'cache-v6.json');
+  if (fs.existsSync(granolaCachePath)) {
+    args.push(
+      '-e',
+      'GRANOLA_CACHE_PATH=/workspace/extra/granola/cache-v6.json',
+    );
+  }
+
+  // Pass Linear API key if set
+  if (process.env.LINEAR_API_KEY) {
+    args.push('-e', `LINEAR_API_KEY=${process.env.LINEAR_API_KEY}`);
+  }
+
+  // Pass GitHub token if set
+  if (process.env.GITHUB_PERSONAL_ACCESS_TOKEN) {
+    args.push(
+      '-e',
+      `GITHUB_PERSONAL_ACCESS_TOKEN=${process.env.GITHUB_PERSONAL_ACCESS_TOKEN}`,
+    );
   }
 
   // Runtime-specific args for host gateway resolution
