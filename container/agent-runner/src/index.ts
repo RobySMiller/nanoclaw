@@ -19,6 +19,8 @@ import path from 'path';
 import { query, HookCallback, PreCompactHookInput } from '@anthropic-ai/claude-agent-sdk';
 import { fileURLToPath } from 'url';
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
 interface ContainerInput {
   prompt: string;
   sessionId?: string;
@@ -414,7 +416,8 @@ async function runQuery(
         'NotebookEdit',
         'mcp__nanoclaw__*',
         'mcp__github__*',
-        'mcp__linear__*'
+        'mcp__linear__*',
+        'mcp__granola__*'
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
@@ -445,6 +448,15 @@ async function runQuery(
             args: [],
             env: {
               LINEAR_API_KEY: process.env.LINEAR_API_KEY,
+            },
+          },
+        } : {}),
+        ...(process.env.GRANOLA_CACHE_PATH ? {
+          granola: {
+            command: 'node',
+            args: [path.join(__dirname, 'granola-mcp.js')],
+            env: {
+              GRANOLA_CACHE_PATH: process.env.GRANOLA_CACHE_PATH,
             },
           },
         } : {}),
@@ -513,7 +525,6 @@ async function main(): Promise<void> {
   // No real secrets exist in the container environment.
   const sdkEnv: Record<string, string | undefined> = { ...process.env };
 
-  const __dirname = path.dirname(fileURLToPath(import.meta.url));
   const mcpServerPath = path.join(__dirname, 'ipc-mcp-stdio.js');
 
   let sessionId = containerInput.sessionId;
