@@ -250,8 +250,10 @@ function buildContainerArgs(
   args.push('-e', `NANOCLAW_AUTH_MODE=${authMode}`);
   if (authMode === 'api-key') {
     args.push('-e', 'ANTHROPIC_API_KEY=placeholder');
+    args.push('-e', 'ANTHROPIC_MODEL=claude-sonnet-4-6');
   } else {
     args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
+    args.push('-e', `ANTHROPIC_MODEL=${process.env.ANTHROPIC_MODEL || 'claude-opus-4-6'}`);
   }
 
   // Pass Granola cache path if available

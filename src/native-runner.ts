@@ -146,8 +146,10 @@ export async function runNativeAgent(
   env.NANOCLAW_AUTH_MODE = authMode;
   if (authMode === 'api-key') {
     env.ANTHROPIC_API_KEY = 'placeholder';
+    env.ANTHROPIC_MODEL = 'claude-sonnet-4-6';
   } else {
     env.CLAUDE_CODE_OAUTH_TOKEN = 'placeholder';
+    env.ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-opus-4-6';
   }
 
   if (extraDir) {
