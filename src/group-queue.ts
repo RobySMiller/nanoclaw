@@ -2,6 +2,7 @@ import { ChildProcess } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
+import { sendAlert } from './alerts.js';
 import { DATA_DIR, MAX_CONCURRENT_CONTAINERS } from './config.js';
 import { logger } from './logger.js';
 
@@ -267,6 +268,7 @@ export class GroupQueue {
         { groupJid, retryCount: state.retryCount },
         'Max retries exceeded, dropping messages (will retry on next incoming message)',
       );
+      sendAlert(`⚠️ Agent failed ${state.retryCount}x for ${groupJid} — messages dropped. Check logs.`);
       state.retryCount = 0;
       return;
     }

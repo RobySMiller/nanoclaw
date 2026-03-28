@@ -67,6 +67,7 @@ import {
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
+import { initAlerts, sendAlert, setAlertChannel } from './alerts.js';
 
 // Re-export for backwards compatibility during refactor
 export { escapeXml, formatMessages } from './router.js';
@@ -317,7 +318,6 @@ async function runAgent(
       }
     : undefined;
 
-
   try {
     const runner = NATIVE_MODE ? runNativeAgent : runContainerAgent;
     const output = await runner(
@@ -504,6 +504,7 @@ async function main(): Promise<void> {
   logger.info('Database initialized');
   loadState();
   restoreRemoteControl();
+  initAlerts();
 
   // Start credential proxy (both container and native mode route API calls through this)
   const proxyServer = await startCredentialProxy(
@@ -521,11 +522,13 @@ async function main(): Promise<void> {
       async () => {
         for (const ch of channels) await ch.disconnect();
         logger.info('Slack disconnected (local takeover)');
+        sendAlert('🟢 Local instance is back online — switching to subscription (OAuth). Railway standing down.');
       },
       // onLocalDead — reconnect Slack to resume processing
       async () => {
         for (const ch of channels) await ch.connect();
         logger.info('Slack reconnected (local went offline)');
+        sendAlert('🔴 Local instance went offline — Railway taking over on API credits. Big tasks will be deferred.');
       },
     );
   } else {
@@ -628,7 +631,13 @@ async function main(): Promise<void> {
       name?: string,
       channel?: string,
       isGroup?: boolean,
-    ) => storeChatMetadata(chatJid, timestamp, name, channel, isGroup),
+    ) => {
+      storeChatMetadata(chatJid, timestamp, name, channel, isGroup);
+      // Set alert channel from first Slack DM seen
+      if (chatJid.startsWith('slack:D') && !isGroup) {
+        setAlertChannel(chatJid);
+      }
+    },
     registeredGroups: () => registeredGroups,
   };
 

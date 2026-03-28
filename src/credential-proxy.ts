@@ -15,6 +15,10 @@ import { createServer, Server } from 'http';
 import { request as httpsRequest } from 'https';
 import { request as httpRequest, RequestOptions } from 'http';
 
+import fs from 'fs';
+import path from 'path';
+
+import { sendAlert } from './alerts.js';
 import { readEnvFile } from './env.js';
 import { logger } from './logger.js';
 
@@ -28,7 +32,8 @@ export interface ProxyConfig {
 
 const TOKEN_URL = 'https://platform.claude.com/v1/oauth/token';
 const CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
-const SCOPES = 'user:profile user:inference user:sessions:claude_code user:mcp_servers';
+const SCOPES =
+  'user:profile user:inference user:sessions:claude_code user:mcp_servers';
 const REFRESH_MARGIN_MS = 5 * 60 * 1000; // refresh 5 minutes before expiry
 
 interface OAuthState {
@@ -64,6 +69,7 @@ async function refreshAccessToken(): Promise<void> {
         { status: response.status, body: text },
         'OAuth token refresh failed',
       );
+      sendAlert(`⚠️ OAuth token refresh failed (HTTP ${response.status}). May fall back to expired token.`);
       return;
     }
 
@@ -75,6 +81,7 @@ async function refreshAccessToken(): Promise<void> {
 
     if (!data.access_token) {
       logger.error({ data }, 'OAuth refresh response missing access_token');
+      sendAlert('⚠️ OAuth refresh response missing access_token.');
       return;
     }
 
@@ -86,14 +93,49 @@ async function refreshAccessToken(): Promise<void> {
       oauthState.expiresAt = Date.now() + data.expires_in * 1000;
     }
 
+    // Persist refreshed tokens to .env so restarts use the latest values
+    persistOAuthTokens(oauthState);
+
     scheduleRefresh();
 
     logger.info(
-      { expiresIn: data.expires_in ? `${Math.round(data.expires_in / 60)}m` : 'unknown' },
+      {
+        expiresIn: data.expires_in
+          ? `${Math.round(data.expires_in / 60)}m`
+          : 'unknown',
+      },
       'OAuth token refreshed',
     );
   } catch (err) {
     logger.error({ err }, 'OAuth token refresh error');
+    sendAlert(`⚠️ OAuth token refresh error: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+function persistOAuthTokens(state: OAuthState): void {
+  try {
+    const envPath = path.join(process.cwd(), '.env');
+    let content = fs.readFileSync(envPath, 'utf-8');
+
+    const updates: Record<string, string> = {
+      CLAUDE_CODE_OAUTH_TOKEN: state.accessToken,
+      CLAUDE_CODE_OAUTH_REFRESH_TOKEN: state.refreshToken,
+      CLAUDE_CODE_OAUTH_EXPIRES_AT: String(state.expiresAt),
+    };
+
+    for (const [key, value] of Object.entries(updates)) {
+      const regex = new RegExp(`^${key}=.*$`, 'm');
+      if (regex.test(content)) {
+        content = content.replace(regex, `${key}=${value}`);
+      } else {
+        content = content.trimEnd() + `\n${key}=${value}\n`;
+      }
+    }
+
+    fs.writeFileSync(envPath, content);
+    logger.info('OAuth tokens persisted to .env');
+  } catch (err) {
+    logger.error({ err }, 'Failed to persist OAuth tokens');
   }
 }
 
@@ -101,7 +143,10 @@ function scheduleRefresh(): void {
   if (refreshTimer) clearTimeout(refreshTimer);
   if (!oauthState) return;
 
-  const delay = Math.max(0, oauthState.expiresAt - Date.now() - REFRESH_MARGIN_MS);
+  const delay = Math.max(
+    0,
+    oauthState.expiresAt - Date.now() - REFRESH_MARGIN_MS,
+  );
   refreshTimer = setTimeout(() => {
     refreshAccessToken();
   }, delay);
@@ -186,9 +231,10 @@ export function startCredentialProxy(
           // only when the container actually sends an Authorization header
           // (exchange request + auth probes). Post-exchange requests use
           // x-api-key only, so they pass through without token injection.
-          const currentToken = oauthState?.accessToken
-            ?? secrets.CLAUDE_CODE_OAUTH_TOKEN
-            ?? secrets.ANTHROPIC_AUTH_TOKEN;
+          const currentToken =
+            oauthState?.accessToken ??
+            secrets.CLAUDE_CODE_OAUTH_TOKEN ??
+            secrets.ANTHROPIC_AUTH_TOKEN;
           if (headers['authorization']) {
             delete headers['authorization'];
             if (currentToken) {
