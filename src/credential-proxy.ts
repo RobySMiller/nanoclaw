@@ -45,7 +45,10 @@ interface OAuthState {
 let oauthState: OAuthState | null = null;
 let refreshTimer: NodeJS.Timeout | null = null;
 
-async function refreshAccessToken(): Promise<void> {
+const MAX_REFRESH_RETRIES = 3;
+const REFRESH_RETRY_DELAYS = [30_000, 120_000, 300_000]; // 30s, 2m, 5m
+
+async function refreshAccessToken(attempt = 0): Promise<void> {
   if (!oauthState) return;
 
   const body = JSON.stringify({
@@ -66,10 +69,17 @@ async function refreshAccessToken(): Promise<void> {
     if (!response.ok) {
       const text = await response.text();
       logger.error(
-        { status: response.status, body: text },
+        { status: response.status, body: text, attempt },
         'OAuth token refresh failed',
       );
-      sendAlert(`⚠️ OAuth token refresh failed (HTTP ${response.status}). May fall back to expired token.`);
+      // Retry on server errors, not on auth errors (which won't recover)
+      if (response.status >= 500 && attempt < MAX_REFRESH_RETRIES) {
+        scheduleRefreshRetry(attempt);
+        return;
+      }
+      sendAlert(
+        `⚠️ OAuth token refresh failed (HTTP ${response.status}). May fall back to expired token.`,
+      );
       return;
     }
 
@@ -107,9 +117,25 @@ async function refreshAccessToken(): Promise<void> {
       'OAuth token refreshed',
     );
   } catch (err) {
-    logger.error({ err }, 'OAuth token refresh error');
-    sendAlert(`⚠️ OAuth token refresh error: ${err instanceof Error ? err.message : String(err)}`);
+    logger.error({ err, attempt }, 'OAuth token refresh error');
+    // Retry on transient errors (DNS, network, timeout)
+    if (attempt < MAX_REFRESH_RETRIES) {
+      scheduleRefreshRetry(attempt);
+      return;
+    }
+    sendAlert(
+      `⚠️ OAuth token refresh failed after ${attempt + 1} attempts: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
+}
+
+function scheduleRefreshRetry(attempt: number): void {
+  const delay = REFRESH_RETRY_DELAYS[attempt] || 300_000;
+  logger.warn(
+    { attempt: attempt + 1, retryInSeconds: delay / 1000 },
+    'OAuth refresh failed, scheduling retry',
+  );
+  setTimeout(() => refreshAccessToken(attempt + 1), delay);
 }
 
 function persistOAuthTokens(state: OAuthState): void {
